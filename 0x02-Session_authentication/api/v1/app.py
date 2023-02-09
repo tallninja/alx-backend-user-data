@@ -2,47 +2,34 @@
 """
 Route module for the API
 """
-import os
-from os import getenv
-from flask import Flask, jsonify, abort, request
-from flask_cors import (CORS, cross_origin)
-from api.v1.views import app_views
 from api.v1.auth.auth import Auth
 from api.v1.auth.basic_auth import BasicAuth
 from api.v1.auth.session_auth import SessionAuth
-from api.v1.auth.session_db_auth import SessionDBAuth
-from api.v1.auth.session_exp_auth import SessionExpAuth
-
+from os import getenv
+from api.v1.views import app_views
+from flask import Flask, jsonify, abort, request
+from flask_cors import (CORS, cross_origin)
+import os
 
 app = Flask(__name__)
 app.register_blueprint(app_views)
 CORS(app, resources={r"/api/v1/*": {"origins": "*"}})
 auth = None
-auth_type = getenv('AUTH_TYPE', 'auth')
-if auth_type == 'auth':
-    auth = Auth()
-if auth_type == 'basic_auth':
-    auth = BasicAuth()
-if auth_type == 'session_auth':
-    auth = SessionAuth()
-if auth_type == 'session_exp_auth':
-    auth = SessionExpAuth()
-if auth_type == 'session_db_auth':
+if os.getenv("AUTH_TYPE") == "session_db_auth":
+    from api.v1.auth.session_db_auth import SessionDBAuth
     auth = SessionDBAuth()
-
-
-@app.errorhandler(401)
-def unauthorized(error) -> str:
-    """Unauthorized handler.
-    """
-    return jsonify({"error": "Unauthorized"}), 401
-
-
-@app.errorhandler(403)
-def forbidden(error) -> str:
-    """Forbidden handler.
-    """
-    return jsonify({"error": "Forbidden"}), 403
+elif os.getenv("AUTH_TYPE") == "session_exp_auth":
+    from api.v1.auth.session_exp_auth import SessionExpAuth
+    auth = SessionExpAuth()
+elif os.getenv("AUTH_TYPE") == "session_auth":
+    from api.v1.auth.session_auth import SessionAuth
+    auth = SessionAuth()
+elif os.getenv("AUTH_TYPE") == "basic_auth":
+    from api.v1.auth.basic_auth import BasicAuth
+    auth = BasicAuth()
+elif os.getenv("AUTH_TYPE") == "auth":
+    from api.v1.auth.auth import Auth
+    auth = Auth()
 
 
 @app.errorhandler(404)
@@ -52,29 +39,45 @@ def not_found(error) -> str:
     return jsonify({"error": "Not found"}), 404
 
 
-@app.before_request
-def authenticate_user():
-    """Authenticates a user before processing a request.
+@app.errorhandler(401)
+def unauthorized(error) -> str:
     """
-    excluded_paths = [
-        '/api/v1/status/',
-        '/api/v1/unauthorized/',
-        '/api/v1/forbidden/',
-        '/api/v1/auth_session/login/'
-        ]
+    Unauthorized handler.
+    """
+    return jsonify({"error": "Unauthorized"}), 401
 
-    if auth:
-        if auth.require_auth(request.path, excluded_paths):
-            if auth.authorization_header(request) is None and\
-                    auth.session_cookie(request) is None:
-                abort(401)
-            request.current_user = auth.current_user(request)
+
+@app.errorhandler(403)
+def forbidden(error) -> str:
+    """
+    Forbidden handler
+    """
+    return jsonify({"error": "Forbidden"}), 403
+
+
+@app.before_request
+def before_request() -> str:
+    """
+    Now the biggest piece is the filtering of each request.
+    For that you will use the Flask method before_request
+    """
+    if auth is not None:
+        if auth.require_auth(request.path, ['/api/v1/status/',
+                                            '/api/v1/unauthorized/',
+                                            '/api/v1/forbidden/',
+                                            '/api/v1/auth_session/login/']):
+
+            if auth.authorization_header(request) is None:
+                if auth.session_cookie(request) is None:
+                    abort(401)
+
             if auth.current_user(request) is None:
                 abort(403)
+
+            request.current_user = auth.current_user(request)
 
 
 if __name__ == "__main__":
     host = getenv("API_HOST", "0.0.0.0")
     port = getenv("API_PORT", "5000")
-    app.debug = True
     app.run(host=host, port=port)
